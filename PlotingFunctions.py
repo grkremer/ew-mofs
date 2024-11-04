@@ -10,7 +10,7 @@ def plotSingleResult(res):
         
     hist = res.history
     max = 100
-    ref_point = np.array([max, 0])
+    ref_point = np.array([max, -0.90])
     ind = HV(ref_point=ref_point)
         
     n_evals = []             # corresponding number of function evaluations\
