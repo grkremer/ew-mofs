@@ -1,1 +1,0 @@
-MAX_FEATURES = 100

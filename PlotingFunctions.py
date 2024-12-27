@@ -5,7 +5,6 @@ from pymoo.indicators.hv import HV
 def plotSingleResult(res):
     n_evals = np.array([e.evaluator.n_eval for e in res.history])
     opt = np.array([e.opt[0].F for e in res.history])
-        
     X_res, F_res = res.opt.get("X", "F")
         
     hist = res.history
