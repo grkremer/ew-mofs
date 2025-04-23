@@ -2,7 +2,7 @@
 from pymoo.core.problem import Problem, ElementwiseProblem, StarmapParallelization
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.algorithms.moo.spea2 import SPEA2
-#from pymoo.algorithms.moo.age import AGEMOEA
+from pymoo.algorithms.moo.age import AGEMOEA
 from pymoo.util.ref_dirs import get_reference_directions
 from pymoo.optimize import minimize
 from pymoo.operators.crossover.pntx import TwoPointCrossover
@@ -40,15 +40,16 @@ from sklearn.preprocessing import StandardScaler, PowerTransformer, MinMaxScaler
 from skrebate import ReliefF
 
 from ucimlrepo import fetch_ucirepo
-from feature_selection_tools import *
+
+MIN_FEATURES = 1
+MAX_FEATURES = 100
+N_PROCESS = 100
 
 model = make_pipeline(
         PowerTransformer(),
-        DecisionTreeClassifier(max_depth = 9))
+        svm.SVC(kernel = 'linear'))
 CLASSIFIER = model
-MIN_FEATURES = 1
-MAX_FEATURES = 100
-N_PROCESS = 64
+
 
 ### Sampling
 class BinaryRandomSampling(Sampling):
@@ -69,92 +70,14 @@ class BinaryDistributedWeightsSampling(Sampling):
         
     def _do(self, problem, n_samples, **kwargs):
         random.seed(self.seed)
-        try:
-            self.sampling_weigh = self.sampling_weights / np.sum(self.sampling_weights, dtype=float)
-        except:
-            pass
         population = []
         for i in range(n_samples):
             trues = np.random.randint(1, min(self.max_features, problem.n_var) + 1)
             individual = np.full(problem.n_var, False)
-            individual[np.random.choice(problem.n_var, trues, p = self.sampling_weights, replace = False )] = True
+            individual[random.choices(range(problem.n_var), weights = self.sampling_weights, k=trues)] = True
             population.append(individual)
         population = np.array(population)
         return population
-
-
-class BinaryPoolSampling(Sampling):
-    def __init__(self, **kwargs):
-        self.sampling_weights = kwargs.pop('sampling_weights', None)
-        self.seed = kwargs.pop('seed', 42)
-        self.max_features = kwargs.pop('max_features', 100)
-        self.pool = kwargs.pop('pool', None)
-        super().__init__(**kwargs)
-        
-    def _do(self, problem, n_samples, **kwargs):
-        random.seed(self.seed)
-        population = []
-        pool_values = []
-        for value in self.pool:
-            for i in range(len(value)):
-                if value[i] < 0:
-                    value[i] = 0
-            value = (value + 0.00001)  / np.sum((value + 0.00001), dtype=float)
-            pool_values.append(value)
-        for i in pool_values:
-            for j in i:
-                if j < 0:
-                    print(j)
-        print(pool_values)
-        print(n_samples, len(self.pool))
-        repeat_times, remainder = divmod(n_samples, len(self.pool))
-        pool_values = pool_values * repeat_times + pool_values[:remainder]
-        for i,value in zip(range(n_samples),pool_values):
-            trues = np.random.randint(1, min(self.max_features, problem.n_var) + 1)
-            individual = np.full(problem.n_var, False)
-            individual[np.random.choice(problem.n_var, trues, p = value, replace = False)] = True
-            population.append(individual)
-        population = np.array(population)
-        print(len(population))
-        return population
-
-class PoolMutation(Mutation):
-    def __init__(self, **kwargs):
-        self.pool = kwargs.pop('pool', None)
-        self.max_features = kwargs.pop('max_features', 100)
-        super().__init__(**kwargs)
-        
-    def _do(self, problem, X, **kwargs):
-        # Itera diretamente em X e full para alterar os valores
-        for individual in X:
-            true_indices = np.where(individual)[0]
-            false_indices = np.where(~individual)[0]
-        
-            # Seleciona um índice de variáveis não nulas
-            if len(true_indices) >= 1:
-                m = np.random.choice(true_indices, size=1, replace=False)
-                individual[m] = 0
-            index = np.random.choice(len(self.pool))
-            value = self.pool[index]
-            value = value[false_indices]
-            # Obtém os índices ordenados do maior para o menor peso
-            sorted_indices = np.argsort(value)[::-1]
-            # Seleciona os top N índices
-            sorted_indices[:min(MAX_FEATURES, len(true_indices))]
-            # Seleciona um índice de variáveil nula
-            if len(false_indices) >= 1:
-                m = np.random.choice(sorted_indices, size=1, replace=False)
-                # Aplica a lógica baseada no Score
-                individual[m] = 1
-
-        for individual in X:
-            if individual.sum() == 0:
-                individual[np.random.choice(range(len(individual)))] = True
-            while individual.sum() > MAX_FEATURES:
-                individual = individual[np.random.choice(np.where(individual == True)[0], MAX_FEATURES)]
-        X = checkEmpty(X, self.max_features)
-        return X
-
 
 class SparseEASampling(Sampling):
     def __init__(self, **kwargs):
@@ -401,30 +324,7 @@ class UniformCrossover(Crossover):
         M = np.random.random((n_matings, n_var)) < 0.5
         _X = crossover_mask(X, M)
         return _X
-        
-class BinaryCrossover(Crossover):
-    def __init__(self, **kwargs):
-        self.max_features = kwargs.pop('max_features', None)
-        super().__init__(2, 1)
 
-    def _do(self, problem, X, **kwargs):
-        n_parents, n_matings, n_var = X.shape
-
-        _X = np.full((self.n_offsprings, n_matings, n_var), False)
-
-        for k in range(n_matings):
-            p1, p2 = X[0, k], X[1, k]
-
-            both_are_true = np.logical_and(p1, p2)
-            _X[0, k, both_are_true] = True
-
-            n_remaining = self.max_features - np.sum(both_are_true)
-
-            I = np.where(np.logical_xor(p1, p2))[0]
-
-            S = I[np.random.permutation(len(I))][:n_remaining]
-            _X[0, k, S] = True
-        return _X
 
 class UX(UniformCrossover):
     pass
@@ -479,28 +379,7 @@ class ThreeToOneCrossover(Crossover):
             child[winner] = True
         return child
 
-
-def getRelieff(X, y):
-    relieff = ReliefF(n_features_to_select=10, n_neighbors=10, n_jobs=48)  # Ajuste os parâmetros conforme necessário
-    pipeline = make_pipeline(
-        StandardScaler(),
-        relieff)
-    pipeline.fit(np.array(X), np.ravel(np.array(y)))
-    return pipeline.steps[1][1].feature_importances_
-from sklearn.preprocessing import StandardScaler, PowerTransformer, MinMaxScaler
-def getRF(X,y):
-    clf = RandomForestClassifier(n_estimators=10000, n_jobs=48)
-    pipeline = make_pipeline(
-            PowerTransformer(),
-            clf)
-    pipeline.fit(X, np.ravel(y))
-    return pipeline.steps[1][1].feature_importances_
-
-def getNormRF(rf):
-    normalizer = make_pipeline(PowerTransformer(), MinMaxScaler())
-    norm_rf = normalizer.fit_transform(rf.reshape(-1, 1))
-    return norm_rf
-
+### Problem Difinition
 class GeneSelection(ElementwiseProblem):
     def __init__(self, X, y, runner):
         self.n_features = X.shape[1]
@@ -569,49 +448,168 @@ def run_experiment(**kwargs):
                       verbose=verbose)
     return result
 
+def get_hv(result, **kwargs):
+    n_evals = np.array([e.evaluator.n_eval for e in result.history])
+    opt = np.array([e.opt[0].F for e in result.history])
+    X_res, F_res = result.opt.get("X", "F")
+            
+    hist = result.history
+    max = 100
+    ref_point = np.array([15, -0.75])
+    ind = HV(ref_point=ref_point)
+            
+    n_evals = []             # corresponding number of function evaluations\
+    hist_F = []              # the objective space values in each generation
+    hist_cv = []             # constraint violation in each generation
+    hist_cv_avg = []         # average constraint violation in the whole population
+            
+    for algo in hist:
+        n_evals.append(algo.evaluator.n_eval)  # store the number of function evaluations
+        opt = algo.opt # retrieve the optimum from the algorithm
+        # store the least contraint violation and the average in each population
+        hist_cv.append(opt.get("CV").min())
+        hist_cv_avg.append(algo.pop.get("CV").mean())
+        # filter out only the feasible and append and objective space values
+        feas = np.where(opt.get("feasible"))[0]
+        hist_F.append(opt.get("F")[feas])
+        
+    metric = HV(ref_point= ref_point, norm_ref_point=False)
+    hv = [metric.do(_F)/max for _F in hist_F]
+    return n_evals, hv
+
+def plot_convergence(results, **kwargs):
+    color = kwargs.get('color', 'black')
+    alpha = kwargs.get('alpha', 0.5)
+    label = kwargs.get('label', None)
+    hvs, n_evals = [], []
+    for result in results:
+        hv = get_hv(result)
+        hvs.extend(hv[1])
+        n_evals.extend(hv[0])
+    df =  pd.DataFrame({
+            "Function Evaluations": n_evals,
+            "Hypervolume": hvs})
+
+    sns.lineplot(data=df, x="Function Evaluations", y="Hypervolume", color = color, label=label, alpha = alpha).set_title('Convergence')
+
+def plot_pareto_front(result, **kwargs):
+    color = kwargs.get('color', 'black')
+    #plt.figure(figsize=(7, 5))
+    F_res = result.opt.get("F")
+    plt.plot(F_res[:, 0][np.argsort(F_res[:, 1])], F_res[:, 1][np.argsort(F_res[:, 1])], color = color,  marker='o', mfc=color, mec=color, ms=2, ls='--', lw=0.5, zorder=2)
+    plt.title("Objective Space")
+
+def plot_multiple_pareto_front(results, **kwargs):
+    color = kwargs.get('color', 'black')
+    title = kwargs.get('title', 'Mean Pareto Front')
+    label = kwargs.get('label', '-')
+    alpha = kwargs.get('alpha', 0.7)
+    moead = kwargs.get('moead', False)
+    #plt.figure(figsize=(7, 5))
+    F_res = []
+    for result in results:
+        F_res.extend(list(result.opt.get("F"))) 
+    F_res = np.array(F_res)
+    unique_keys = np.unique(F_res[:, 0])
+    F_res = np.array([[key, F_res[F_res[:, 0] == key, 1].mean()] for key in unique_keys])
+    
+    df = pd.DataFrame({'n_features': F_res[:, 0][np.argsort(F_res[:, 0])],
+                      'f1_score': F_res[:, 1][np.argsort(F_res[:, 0])]})
+    if moead:
+        df[['n_features']] = df[['n_features']] * 60
+    sns.scatterplot(data = df ,x = 'n_features', y = 'f1_score', color = color,  marker='o', label=label, alpha = alpha)
+    sns.lineplot(data = df ,x = 'n_features', y = 'f1_score', color = color, legend=False, linewidth=1, alpha = alpha)
+    plt.title(title)
+    plt.legend(loc="upper right")
+
+def plot_best_pareto_front(results, **kwargs):
+    color = kwargs.get('color', 'black')
+    title = kwargs.get('title', 'Best Pareto Front')
+    label = kwargs.get('label', '-')
+    #plt.figure(figsize=(7, 5))
+    F_res = []
+    for result in results:
+        F_res.extend(list(result.opt.get("F"))) 
+    F_res = find_pareto_frontier(F_res)
+    F_res = np.array(F_res)
+    unique_keys = np.unique(F_res[:, 0])
+    F_res = np.array([[key, F_res[F_res[:, 0] == key, 1].min()] for key in unique_keys])
+    plt.plot(F_res[:, 0][np.argsort(F_res[:, 0])], F_res[:, 1][np.argsort(F_res[:, 0])], color = color,  marker='o', mec=color, ms=2, ls='--', lw=0.5, zorder=2, label=label)
+    plt.title(title)
+    plt.legend(loc="upper right")
+
+
+def find_pareto_frontier(points):
+    unique_points = []
+    seen = set()
+    for point in points:
+        tuple_point = tuple(point)
+        if tuple_point not in seen:
+            seen.add(tuple_point)
+            unique_points.append(point)
+    frontier = []
+    for p in unique_points:
+        is_dominated = False
+        for q in unique_points:
+            if np.array_equal(q, p):
+                continue  # Não comparar o mesmo ponto
+            if (np.all(q <= p) and np.any(q < p)):
+                is_dominated = True
+                break
+        if not is_dominated:
+            frontier.append(p)
+    
+    return frontier
+
+def getSparseEAWeight(X, y):
+    X = np.array(X)
+    weights = []
+    for i in trange(len(X[0])):
+        f_1 = []
+        n_tests = 5
+        seed = 41
+        X_selected = X[:,i]
+        for i in range(n_tests):
+            seed = seed + 1
+            skf = StratifiedKFold(n_splits=5, random_state=seed, shuffle=True) # Kfolding usado para separar em treino e teste
+            clf = CLASSIFIER # treino usando modelo SVM
+            f_1.append(np.mean(cross_val_score(clf, X_selected.reshape(-1, 1), y, cv=skf, scoring='f1_macro', n_jobs = 10))) # Computar f1
+        
+        weights.append(round(np.array(f_1).sum()/n_tests, 3))
+    return weights
+
+def getRelieff(X, y):
+    relieff = ReliefF(n_features_to_select=10, n_neighbors=10, n_jobs=48)  # Ajuste os parâmetros conforme necessário
+    pipeline = make_pipeline(
+        StandardScaler(),
+        relieff)
+    pipeline.fit(np.array(X), np.ravel(np.array(y)))
+    return pipeline.steps[1][1].feature_importances_
+
+def getRF(X,y):
+    clf = RandomForestClassifier(n_estimators=1000, n_jobs=48)
+    pipeline = make_pipeline(
+            StandardScaler(),
+            clf)
+    pipeline.fit(X, np.ravel(y))
+    return pipeline.steps[1][1].feature_importances_
+
 def run_dataset(X, y, n_experiments, n_population, n_gen, max_features, n_process):
     pool = multiprocessing.Pool(n_process, initializer=_init_evaluator(X,y))
     runner = StarmapParallelization(pool.starmap)
     problem = GeneSelection(X,y, runner)
 
-    '''sc_rf = getRF(X, y)
-    sc_rf_norm = getNormRF(sc_rf)
+    sc_rf = getRF(X, y)
     sc_relieff = getRelieff(X, y)
-    sc_sparseEA = getSparseEAWeight(X,y)'''
-    pool_values = generate_importances(X, y)
-
+    sc_sparseEA = getSparseEAWeight(X,y)
     
-    results_dict = dict({#'age_moea': [],
-                         #'nsga2': [],
-                         #'spea2': [],
-                         #'sparseEA': [],
-                         #'mofs_rfga': [],
-                         #'nsga2_weighteds': [],
-                         'moo-hfs': []})
+    results_dict = dict({'age_moea': [],
+                         'nsga2': [],
+                         'spea2':[],
+                         'sparseEA':[],
+                         'mofs_rfga': [],
+                         'nsga2_weighted': []})
     for i in tqdm(range(n_experiments)):
-        result = run_experiment(problem = problem,
-                   algorithm = NSGA2,
-                   n_population = n_population,
-                   n_gen = n_gen,
-                   sampling =  BinaryPoolSampling(max_features = 100, seed = i, pool = pool_values),
-                   seed = i,
-                   mutation = PoolMutation(pool = pool_values, max_features = 100),
-                   crossover = BinaryCrossover(max_features = 100),
-                   max_features = max_features)
-        results_dict['moo-hfs'].append(result)
-        '''
-        result = run_experiment(problem = problem,
-                   algorithm = NSGA2,
-                   n_population = n_population,
-                   n_gen = n_gen,
-                   sampling = BinaryDistributedWeightsSampling(sampling_weights = sc_rf_norm, max_features = max_features),
-                   seed = i,
-                   mutation = BitflipMutationLimitedBalanced(weights = sc_rf_norm, max_features = max_features),
-                   crossover = UniformCrossover(),
-                   max_features = max_features)
-        results_dict['nsga2_weighted_norm'].append(result)
-        
-        
         result = run_experiment(problem = problem,
                    algorithm = NSGA2,
                    n_population = n_population,
@@ -622,6 +620,7 @@ def run_dataset(X, y, n_experiments, n_population, n_gen, max_features, n_proces
                    crossover = UniformCrossover(),
                    max_features = max_features)
         results_dict['nsga2'].append(result)
+        print(result.exec_time)
     
         result = run_experiment(problem = problem,
                    algorithm = SPEA2,
@@ -665,8 +664,7 @@ def run_dataset(X, y, n_experiments, n_population, n_gen, max_features, n_proces
                    mutation = BitflipMutationLimitedBalanced(weights = sc_rf, max_features = max_features),
                    crossover = UniformCrossover(),
                    max_features = max_features)
-        results_dict['nsga2_weighted'].append(result)'''
-
+        results_dict['nsga2_weighted'].append(result)
         for label in results_dict:
             for res in results_dict[label]:
                 res = clean_result(res)
@@ -711,3 +709,30 @@ def clean_result(res):
         pop.tournament_type = None
         pop.verbose = None
     return res
+
+from ucimlrepo import fetch_ucirepo
+from sklearn.datasets import fetch_openml
+from functions import *
+
+MIN_FEATURES = 1
+MAX_FEATURES = 100
+N_PROCESS = 56
+
+def wrap_execution(X, y, name):
+    print(name)
+    test = run_dataset(X = X, y = y, n_experiments = 5, n_population = 100, n_gen = 100, max_features = 100, n_process = N_PROCESS)
+    with open("Data/results/svm/" + name + ".pkl", "wb") as f:  # 'wb' = write in binary mode
+        pickle.dump(test, f)
+    del test
+    print('----------------------------------------------------------------------')
+    
+
+def main():
+    X = np.array(pd.read_csv('./Data/madelon_valid.data', sep = ' ', header = None).iloc[:,:500])
+    y = np.ravel(np.array(pd.read_csv('./Data/madelon_valid.labels', sep = ' ', header = None)))
+    
+    start_time = time.time()
+    wrap_execution(X,y,'SVM20A')
+    print("Time ", (time.time() - start_time))
+if __name__ == '__main__':
+    main()
